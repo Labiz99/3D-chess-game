@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Slate &amp; Ivory 3D Chess</title>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#10161a;--ink:#efe6d2;--dim:#9aa7a6;--amber:#e0a43a;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font-family:'Cormorant Garamond',Georgia,serif;overflow:hidden}
+#c{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none}
+#top{position:fixed;left:0;right:0;top:calc(env(safe-area-inset-top,0px) + 12px);text-align:center;pointer-events:none;text-shadow:0 2px 12px #000}
+#st{font-size:28px;font-weight:700}
+#sub{font-size:17px;color:var(--dim)}
+#bar{position:fixed;left:0;right:0;bottom:calc(env(safe-area-inset-bottom,0px) + 14px);display:flex;gap:8px;justify-content:center;flex-wrap:wrap;padding:0 10px}
+button{font:inherit;font-size:19px;font-weight:700;color:var(--ink);background:rgba(239,230,210,.08);border:1px solid rgba(239,230,210,.35);border-radius:6px;padding:8px 14px;min-height:44px}
+button:active{background:rgba(224,164,58,.28)}
+button:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+#pr{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);display:flex;gap:8px;padding:14px;background:rgba(16,22,26,.94);border:1px solid rgba(239,230,210,.35);border-radius:8px}
+#pr[hidden]{display:none}
+#lb{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);display:flex;flex-direction:column;gap:10px;padding:16px;max-width:86vw;text-align:center;font-size:20px;background:rgba(16,22,26,.96);border:1px solid rgba(239,230,210,.35);border-radius:8px}
+#lb[hidden]{display:none}
+#lb .r{display:flex;gap:8px}
+#lm{font-size:17px;color:var(--amber);min-height:1.2em}
+input{font:inherit;font-size:20px;text-transform:uppercase;width:6em;min-width:0;flex:1;padding:6px 10px;color:var(--ink);background:rgba(239,230,210,.08);border:1px solid rgba(239,230,210,.35);border-radius:6px}
+input:focus-visible{outline:2px solid var(--amber)}
+</style></head><body>
+<canvas id="c"></canvas>
+<div id="top"><div id="st"></div><div id="sub">Drag to turn the board. Pinch or scroll to zoom.</div></div>
+<div id="bar"><button id="nb">New game</button><button id="ub">Undo</button><button id="mb"></button><button id="ob" hidden>Play online</button><button id="db"></button><button id="fb">Flip view</button></div>
+<div id="lb" hidden><div>Play online</div><button id="lc">Create game</button><div class="r"><input id="li" maxlength="5" placeholder="Game code" autocapitalize="characters" autocomplete="off"><button id="lj">Join</button></div><div id="lm"></div><button id="lx">Close</button></div>
+<div id="pr" hidden><button data-k="Q">Queen</button><button data-k="R">Rook</button><button data-k="B">Bishop</button><button data-k="N">Knight</button></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const $=s=>document.querySelector(s);
+/* ---------- engine ---------- */
+const T={P:100,N:320,B:330,R:500,Q:900,K:0};
+const ST=[[1,2],[2,1],[-1,2],[-2,1],[1,-2],[2,-1],[-1,-2],[-2,-1]];
+const KS=[[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+const RD=KS.slice(0,4),BD=KS.slice(4);
+const ok=(r,c)=>r>=0&&r<8&&c>=0&&c<8;
+const opp=c=>c=='w'?'b':'w';
+const kingSq=(b,c)=>b.indexOf(c+'K');
+function start(){const b=Array(64).fill(null),k='RNBQKBNR';for(let c=0;c<8;c++){b[c]='b'+k[c];b[8+c]='bP';b[48+c]='wP';b[56+c]='w'+k[c]}return{b,rt:{wK:1,wQ:1,bK:1,bQ:1},turn:'w',ep:-1}}
+function att(b,sq,by){const r=sq>>3,c=sq&7,pd=by=='w'?1:-1;
+ for(const dc of[-1,1]){const rr=r+pd,cc=c+dc;if(ok(rr,cc)&&b[rr*8+cc]==by+'P')return true}
+ for(const[a,d]of ST){const rr=r+a,cc=c+d;if(ok(rr,cc)&&b[rr*8+cc]==by+'N')return true}
+ for(const[a,d]of KS){const rr=r+a,cc=c+d;if(ok(rr,cc)&&b[rr*8+cc]==by+'K')return true}
+ for(const[ds,x]of[[RD,'R'],[BD,'B']])for(const[a,d]of ds){let rr=r+a,cc=c+d;while(ok(rr,cc)){const p=b[rr*8+cc];if(p){if(p[0]==by&&(p[1]==x||p[1]=='Q'))return true;break}rr+=a;cc+=d}}
+ return false}
+function pseudo(b,col,ep){const m=[];for(let i=0;i<64;i++){const p=b[i];if(!p||p[0]!=col)continue;const r=i>>3,c=i&7,t=p[1];
+ const add=(rr,cc)=>{const q=b[rr*8+cc];if(!q||q[0]!=col)m.push([i,rr*8+cc]);return !q};
+ if(t=='P'){const d=col=='w'?-1:1,s=col=='w'?6:1,r1=r+d;
+  if(ok(r1,c)&&!b[r1*8+c]){m.push([i,r1*8+c]);if(r==s&&!b[(r+2*d)*8+c])m.push([i,(r+2*d)*8+c])}
+  for(const dc of[-1,1])if(ok(r1,c+dc)){const q=b[r1*8+c+dc];if((q&&q[0]!=col)||(!q&&r1*8+c+dc==ep))m.push([i,r1*8+c+dc])}}
+ else if(t=='N'||t=='K'){for(const[a,d]of t=='N'?ST:KS)if(ok(r+a,c+d))add(r+a,c+d)}
+ else{for(const[a,d]of t=='R'?RD:t=='B'?BD:KS){let rr=r+a,cc=c+d;while(ok(rr,cc)){if(!add(rr,cc))break;rr+=a;cc+=d}}}}
+ return m}
+function make(s,m){const[f,t]=m,b=s.b.slice(),p=b[f],rt={...s.rt};let ep=-1;const cap=b[t];b[t]=p;b[f]=null;
+ if(p[1]=='P'){if(Math.abs(t-f)==16)ep=(f+t)/2;if(!cap&&(t-f)%8!=0)b[(f>>3)*8+(t&7)]=null;if(t>>3==0||t>>3==7)b[t]=p[0]+(m[2]||'Q')}
+ if(p[1]=='K'&&Math.abs(t-f)==2){const rf=t>f?f+3:f-4,rn=t>f?f+1:f-1;b[rn]=b[rf];b[rf]=null}
+ for(const q of[f,t]){if(q==60||q==63)rt.wK=0;if(q==60||q==56)rt.wQ=0;if(q==4||q==7)rt.bK=0;if(q==4||q==0)rt.bQ=0}
+ return{b,rt,ep,turn:opp(s.turn)}}
+function legal(s,full){const c=s.turn,o=opp(c),out=[];
+ for(const m of pseudo(s.b,c,s.ep)){const n=make(s,m);if(!att(n.b,kingSq(n.b,c),o))out.push(m)}
+ const k=c=='w'?60:4,b=s.b;
+ if(b[k]==c+'K'&&!att(b,k,o)){
+  if(s.rt[c+'K']&&!b[k+1]&&!b[k+2]&&b[k+3]==c+'R'&&!att(b,k+1,o)&&!att(b,k+2,o))out.push([k,k+2]);
+  if(s.rt[c+'Q']&&!b[k-1]&&!b[k-2]&&!b[k-3]&&b[k-4]==c+'R'&&!att(b,k-1,o)&&!att(b,k-2,o))out.push([k,k-2])}
+ if(!full)return out;const x=[];for(const m of out){if(s.b[m[0]][1]=='P'&&(m[1]>>3==0||m[1]>>3==7))for(const k of'QRBN')x.push([m[0],m[1],k]);else x.push(m)}return x}
+function val(b){let s=0;for(let i=0;i<64;i++){const p=b[i];if(!p)continue;const r=i>>3,c=i&7;let v=T[p[1]];
+ if(p[1]!='K')v+=(7-Math.abs(7-2*c)/1-Math.abs(7-2*r))*3;
+ if(p[1]=='P')v+=(p[0]=='w'?6-r:r-1)*8;s+=p[0]=='w'?v:-v}return s}
+function search(s,d,a,bt){const ms=legal(s);
+ if(!ms.length)return att(s.b,kingSq(s.b,s.turn),opp(s.turn))?(s.turn=='w'?-99999-d:99999+d):0;
+ if(!d)return val(s.b);
+ const cv=m=>s.b[m[1]]?T[s.b[m[1]][1]]:0;ms.sort((x,y)=>cv(y)-cv(x));
+ if(s.turn=='w'){let v=-Infinity;for(const m of ms){v=Math.max(v,search(make(s,m),d-1,a,bt));a=Math.max(a,v);if(a>=bt)break}return v}
+ let v=Infinity;for(const m of ms){v=Math.min(v,search(make(s,m),d-1,a,bt));bt=Math.min(bt,v);if(a>=bt)break}return v}
+let LV=1;
+function ai(s){let best=null,bs=Infinity;const w=s.turn=='w',d=[0,2,3][LV],rn=[60,6,2][LV];
+ for(const m of legal(s)){const v=search(make(s,m),d,-Infinity,(w||bs==Infinity)?Infinity:bs+rn)*(w?-1:1)+Math.random()*rn;if(v<bs){bs=v;best=m}}return best}
+
+/* ---------- scene ---------- */
+const cv=$('#c'),R=new THREE.WebGLRenderer({canvas:cv,antialias:true});
+R.setPixelRatio(Math.min(devicePixelRatio,2));R.shadowMap.enabled=true;
+const sc=new THREE.Scene();sc.background=new THREE.Color(0x10161a);
+const cam=new THREE.PerspectiveCamera(40,1,.1,100);
+sc.add(new THREE.HemisphereLight(0xdfe9ee,0x1a2226,.95));
+const dl=new THREE.DirectionalLight(0xfff1d6,.85);dl.position.set(4,9,5);dl.castShadow=true;dl.shadow.mapSize.set(1024,1024);
+Object.assign(dl.shadow.camera,{left:-6,right:6,top:6,bottom:-6});sc.add(dl);
+const base=new THREE.Mesh(new THREE.BoxGeometry(9.2,.5,9.2),new THREE.MeshStandardMaterial({color:0x1d272b,roughness:.7}));
+base.position.y=-.35;base.receiveShadow=true;sc.add(base);
+const sg=new THREE.Group(),pg=new THREE.Group(),mg=new THREE.Group();sc.add(sg,pg,mg);
+const pos=i=>new THREE.Vector3((i&7)-3.5,0,(i>>3)-3.5);
+const sq=[];
+for(let i=0;i<64;i++){const light=((i>>3)+(i&7))%2==0;
+ const m=new THREE.Mesh(new THREE.BoxGeometry(1,.2,1),new THREE.MeshStandardMaterial({color:light?0xd9ccaa:0x3d5a5c,roughness:.6}));
+ m.position.set((i&7)-3.5,-.1,(i>>3)-3.5);m.receiveShadow=true;sg.add(m);sq.push(m)}
+
+const PROF={P:[[.14,.3],[.2,.36],[.1,.4],[0,.4]],R:[[.2,.2],[.2,.55],[.3,.6],[.3,.8],[0,.8]],N:[[.2,.2],[.16,.5],[0,.52]],
+ B:[[.14,.3],[.2,.45],[.12,.55],[0,.55]],Q:[[.14,.35],[.22,.7],[.3,.8],[.2,.85],[0,.85]],K:[[.14,.35],[.22,.75],[.28,.85],[0,.85]]};
+function mkPiece(code){const col=code[0],t=code[1],g=new THREE.Group();
+ const mat=new THREE.MeshStandardMaterial({color:col=='w'?0xefe6d2:0x2b333b,roughness:.35,metalness:col=='w'?0:.25,side:THREE.DoubleSide});
+ const pts=[[0,0],[.34,0],[.34,.08],[.24,.16]].concat(PROF[t]).map(([x,y])=>new THREE.Vector2(x,y));
+ g.add(new THREE.Mesh(new THREE.LatheGeometry(pts,22),mat));
+ const add=(geo,x,y,z,fn)=>{const m=new THREE.Mesh(geo,mat);m.position.set(x,y,z);if(fn)fn(m);g.add(m)};
+ const S=r=>new THREE.SphereGeometry(r,16,12),B=(x,y,z)=>new THREE.BoxGeometry(x,y,z);
+ if(t=='P')add(S(.17),0,.5,0);
+ if(t=='R')for(const[x,z]of[[.22,0],[-.22,0],[0,.22],[0,-.22]])add(B(.1,.12,.1),x,.84,z);
+ if(t=='N'){add(B(.24,.46,.3),0,.68,0,m=>m.rotation.x=-.2);add(B(.22,.2,.3),0,.78,-.2,m=>m.rotation.x=.25);g.rotation.y=col=='w'?0:Math.PI}
+ if(t=='B'){add(S(.16),0,.7,0,m=>m.scale.y=1.4);add(S(.05),0,.97,0)}
+ if(t=='Q'){add(new THREE.TorusGeometry(.22,.04,8,22),0,.86,0,m=>m.rotation.x=Math.PI/2);add(S(.09),0,.97,0)}
+ if(t=='K'){add(B(.09,.32,.09),0,1.0,0);add(B(.26,.09,.09),0,1.04,0)}
+ g.traverse(o=>{o.castShadow=true});return g}
+
+/* ---------- game state ---------- */
+let S=start(),hist=[],last=null,sel=-1,L=[],chk=false,over=false,mode='ai',busy=false,gid=0;
+const pm=Array(64).fill(null);
+function rebuild(){while(pg.children.length)pg.remove(pg.children[0]);pm.fill(null);
+ S.b.forEach((c,i)=>{if(c){const m=mkPiece(c);m.position.copy(pos(i));m.tg=pos(i);pg.add(m);pm[i]=m}})}
+function animate(m,prev){const[f,t]=m,p=prev.b[f];
+ if(pm[t])pg.remove(pm[t]);if(p[1]=='P'&&!prev.b[t]&&(t-f)%8!=0){const e=(f>>3)*8+(t&7);pg.remove(pm[e]);pm[e]=null}pm[t]=pm[f];pm[f]=null;pm[t].tg=pos(t);
+ if(p[1]=='K'&&Math.abs(t-f)==2){const rf=t>f?f+3:f-4,rn=t>f?f+1:f-1;pm[rn]=pm[rf];pm[rf]=null;pm[rn].tg=pos(rn)}
+ if(p[1]=='P'&&(t>>3==0||t>>3==7)){const p0=pm[t].position.clone();pg.remove(pm[t]);const q=mkPiece(p[0]+(m[2]||'Q'));q.position.copy(p0);q.tg=pos(t);pg.add(q);pm[t]=q}}
+const dotG=new THREE.CylinderGeometry(.15,.15,.02,20),ringG=new THREE.RingGeometry(.36,.46,28).rotateX(-Math.PI/2);
+const dotM=new THREE.MeshBasicMaterial({color:0xe0a43a}),ringM=new THREE.MeshBasicMaterial({color:0xe0553a,side:THREE.DoubleSide});
+function marks(){while(mg.children.length)mg.remove(mg.children[0]);
+ for(const m of L)if(m[0]==sel){const cap=S.b[m[1]],x=new THREE.Mesh(cap?ringG:dotG,cap?ringM:dotM);x.position.copy(pos(m[1]));x.position.y=.015;mg.add(x)}}
+function paint(){for(let i=0;i<64;i++){let e=0;if(last&&(i==last[0]||i==last[1]))e=0x3a2a08;if(i==sel)e=0x7a5410;sq[i].material.emissive.setHex(e)}
+ if(chk){const k=kingSq(S.b,S.turn);if(k>=0)sq[k].material.emissive.setHex(0x7a1414)}}
+function refresh(){promo=null;$('#pr').hidden=true;L=legal(S,true);chk=att(S.b,kingSq(S.b,S.turn),opp(S.turn));over=!L.length;
+ const w=S.turn=='w',ai_=mode=='ai';let t;
+ if(OL){const d=OL.d||{},you=OL.col;
+  if(!d.b)t='Waiting for opponent. Game code '+OL.code;
+  else if(over)t=chk?(you?(S.turn==you?'Checkmate. You lose.':'Checkmate. You win.'):`Checkmate. ${w?'Black':'White'} wins.`):'Stalemate. Draw.';
+  else t=(chk?'Check. ':'')+(you?(S.turn==you?'Your move':'Opponent to move'):(w?'White to move':'Black to move'))}
+ else if(over)t=chk?(ai_?(w?'Checkmate. Computer wins.':'Checkmate. You win.'):`Checkmate. ${w?'Black':'White'} wins.`):'Stalemate. Draw.';
+ else{t=(chk?'Check. ':'')+(ai_?(w?'Your move':'Computer is thinking'):(w?'White to move':'Black to move'))}
+ $('#st').textContent=t;$('#sub').textContent=OL?((OL.d&&OL.d.b)?'':'Open this page on another device, tap Play online, and join with the code.'):(hist.length?'':'Drag to turn the board. Pinch or scroll to zoom.');
+ $('#mb').textContent=mode=='on'?'Online':ai_?'Vs computer':'Two players';$('#db').textContent='Level: '+['Easy','Medium','Hard'][LV];paint();marks()}
+function maybeAI(){if(mode=='ai'&&S.turn=='b'&&L.length&&!busy){busy=true;const g=gid;
+ setTimeout(()=>{if(g!=gid)return;const mv=ai(S);busy=false;if(mv)doMove(mv)},400)}}
+function doMove(m){hist.push({S,last});const prev=S;S=make(S,m);last=m;sel=-1;animate(m,prev);refresh();maybeAI();
+ if(OL){OL.n++;OL.ref.update({st:JSON.stringify(S),last:m,m,n:OL.n}).catch(()=>{$('#st').textContent='Move not sent. Check your connection.'})}}
+let promo=null;
+function askPromo(ms){promo=ms;$('#pr').hidden=false}
+document.querySelectorAll('#pr button').forEach(b=>b.onclick=()=>{const ms=promo;promo=null;$('#pr').hidden=true;doMove(ms.find(x=>x[2]==b.dataset.k))});
+function tap(e){if(promo||over||busy||(mode=='ai'&&S.turn!='w')||(OL&&(OL.col!=S.turn||!OL.d||!OL.d.b)))return;
+ const r=cv.getBoundingClientRect(),ray=new THREE.Raycaster();
+ ray.setFromCamera(new THREE.Vector2((e.clientX-r.left)/r.width*2-1,-((e.clientY-r.top)/r.height)*2+1),cam);
+ const h=ray.intersectObjects([sg,pg],true)[0];if(!h)return;
+ const c=Math.floor(h.point.x+4),rw=Math.floor(h.point.z+4);if(c<0||c>7||rw<0||rw>7)return;
+ const i=rw*8+c;
+ if(sel>=0){const ms=L.filter(x=>x[0]==sel&&x[1]==i);if(ms.length==1){doMove(ms[0]);return}if(ms.length>1){askPromo(ms);return}}
+ const p=S.b[i];sel=p&&p[0]==S.turn?i:-1;paint();marks()}
+function newGame(){gid++;busy=false;S=start();hist=[];last=null;sel=-1;rebuild();refresh()}
+$('#nb').onclick=()=>{leaveOnline();newGame()};
+$('#ub').onclick=()=>{if(OL||busy||!hist.length)return;let h=hist.pop();S=h.S;last=h.last;sel=-1;
+ if(mode=='ai'&&S.turn=='b'&&hist.length){h=hist.pop();S=h.S;last=h.last}
+ gid++;rebuild();refresh()};
+$('#mb').onclick=()=>{if(OL){leaveOnline();newGame();return}mode=mode=='ai'?'two':'ai';refresh();maybeAI()};
+$('#db').onclick=()=>{if(OL)return;LV=(LV+1)%3;refresh()};
+$('#fb').onclick=()=>{V.th+=Math.PI};
+
+/* ---------- online play ---------- */
+let OL=null,DBH=null,USR=null;
+const gen=()=>Array.from({length:5},()=>'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.random()*32|0]).join('');
+function leaveOnline(){if(OL){if(OL.unsub)OL.unsub();OL=null;mode='ai'}}
+function onGame(snap){if(!OL||!snap.exists)return;const d=snap.data();OL.d=d;
+ if(d.n>OL.n){const prev=S;S=JSON.parse(d.st);last=d.last;sel=-1;
+  if(OL.n>=0&&d.n==OL.n+1&&d.m)animate(d.m,prev);else rebuild();
+  OL.n=d.n}
+ refresh()}
+async function openGame(code,create){const msg=$('#lm');msg.textContent='';
+ try{const me=await USR.id(),ref=DBH.doc('games/'+code),snap=await ref.get();let col=null;
+  if(create){if(snap.exists)return openGame(gen(),true);
+   await ref.set({w:me,b:null,st:JSON.stringify(start()),last:null,m:null,n:0});col='w'}
+  else{if(!snap.exists){msg.textContent='No game with that code.';return}
+   const d=snap.data();
+   if(d.w==me)col='w';else if(d.b==me)col='b';else if(!d.b){await ref.update({b:me});col='b'}}
+  leaveOnline();gid++;busy=false;hist=[];last=null;sel=-1;
+  OL={ref,code,me,col,n:-1,d:null};mode='on';V.th=col=='b'?Math.PI:0;$('#lb').hidden=true;
+  OL.unsub=ref.onSnapshot(onGame,()=>{$('#st').textContent='Connection lost. Rejoin with the game code.'})}
+ catch(e){msg.textContent=e&&e.code=='invalid_argument'?'Playing online needs Contributor access. Ask the page owner to share it with you as a Contributor.':'Could not connect. Try again.'}}
+$('#ob').onclick=()=>{$('#lm').textContent='';$('#lb').hidden=false};
+$('#lx').onclick=()=>{$('#lb').hidden=true};
+$('#lc').onclick=()=>openGame(gen(),true);
+$('#lj').onclick=()=>{const c=$('#li').value.trim().toUpperCase();if(c)openGame(c,false)};
+(async()=>{try{if(!window.claude)return;DBH=await claude.use('db');USR=await claude.use('user');if(DBH&&USR)$('#ob').hidden=false}catch(e){}})();
+
+/* ---------- camera + input ---------- */
+const clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
+const V={th:0,ph:1.0,d:12};
+function rs(){const w=innerWidth,h=innerHeight;R.setSize(w,h,false);cam.aspect=w/h;cam.updateProjectionMatrix()}
+addEventListener('resize',rs);rs();
+V.d=clamp(4.6/(.364*cam.aspect),11,30);
+const ptr=new Map();let down=null,pd0=1;
+const pinch=()=>{const a=[...ptr.values()];return Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y)||1};
+cv.addEventListener('pointerdown',e=>{cv.setPointerCapture(e.pointerId);ptr.set(e.pointerId,{x:e.clientX,y:e.clientY});
+ if(ptr.size==1)down={mv:0};if(ptr.size==2)pd0=pinch()});
+cv.addEventListener('pointermove',e=>{const p=ptr.get(e.pointerId);if(!p)return;
+ const dx=e.clientX-p.x,dy=e.clientY-p.y;p.x=e.clientX;p.y=e.clientY;down.mv+=Math.abs(dx)+Math.abs(dy);
+ if(ptr.size==1){V.th-=dx*.006;V.ph=clamp(V.ph-dy*.006,.25,1.45)}
+ else if(ptr.size==2){const d=pinch();V.d=clamp(V.d*pd0/d,7,32);pd0=d}});
+cv.addEventListener('pointerup',e=>{if(ptr.size==1&&down&&down.mv<8)tap(e);ptr.delete(e.pointerId)});
+cv.addEventListener('pointercancel',e=>ptr.delete(e.pointerId));
+cv.addEventListener('wheel',e=>{e.preventDefault();V.d=clamp(V.d+e.deltaY*.01,7,32)},{passive:false});
+function loop(){
+ cam.position.set(Math.sin(V.th)*Math.sin(V.ph)*V.d,Math.cos(V.ph)*V.d,Math.cos(V.th)*Math.sin(V.ph)*V.d);
+ cam.lookAt(0,.2,0);
+ for(const m of pm)if(m)m.position.lerp(m.tg,.18);
+ R.render(sc,cam);requestAnimationFrame(loop)}
+rebuild();refresh();loop();
+</script></body></html>
